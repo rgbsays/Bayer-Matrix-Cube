@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Rubik's Cube — TempleOS TV Snow (Bayer, Multi-Level, HUD)</title>
+<style>
+  :root{ --bg:#0f1115; --panel:#151924; --text:#e6e7ea; --muted:#a7adbb; --btn:#1e2636; --btn2:#202a3f; --accent:#9ad1ff; }
+  *{box-sizing:border-box}
+  body{ margin:0; background:linear-gradient(180deg,#0b0d12 0%, #0f1115 60%, #0b0d12 100%);
+        color:var(--text); font:14px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;
+        display:grid; grid-template-columns:minmax(300px,1fr) 360px; gap:16px; min-height:100vh; }
+  #stage{position:relative; display:flex; align-items:center; justify-content:center; padding:12px; z-index:0}
+  #ui{ background:var(--panel); border-left:1px solid #232a3a; padding:16px; display:flex; flex-direction:column; gap:14px;
+       box-shadow:-6px 0 24px rgba(0,0,0,.25); position:relative; z-index:5 }
+  h1{font-size:16px; margin:0 0 8px}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .col{display:flex; flex-direction:column; gap:8px}
+  label{color:var(--muted); font-size:12px}
+  input[type="number"], input[type="range"]{ width:100%; background:#0e1420; color:var(--text); border:1px solid #2a3550; padding:6px 8px; border-radius:8px; outline:none; }
+  button{ appearance:none; border:1px solid #2a3550; background:linear-gradient(180deg,var(--btn) 0%, var(--btn2) 100%);
+          color:var(--text); padding:8px 10px; border-radius:10px; cursor:pointer; transition:transform .05s ease,border-color .2s; }
+  button:hover{border-color:#3a4a72} button:active{transform:translateY(1px)}
+  .tbtn[aria-pressed="true"]{ border-color:#4ea1ff; background:linear-gradient(180deg,#24324f 0%, #2c3a5c 100%); }
+  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:6px}
+  .tiny{font-size:12px; color:var(--muted)}
+  #moves{ min-height:58px; max-height:160px; overflow:auto; background:#0e1420; border:1px solid #2a3550; border-radius:8px; padding:8px;
+          font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:#cdd7ff; }
+  #hint{color:#a0a8c0; font-size:12px}
+  canvas{display:block; position:relative; z-index:1; border-radius:14px; box-shadow:0 10px 40px rgba(0,0,0,.4)}
+  /* HUD overlay */
+  #hudPanel{position:absolute; top:10px; left:10px; width:260px; background:rgba(10,13,22,.78); border:1px solid #2a3550; border-radius:10px; padding:10px; backdrop-filter:blur(4px); pointer-events:none; z-index:9999}
+  #hudPanel *{pointer-events:none;}
+  #hud{display:block; width:240px; height:90px; image-rendering:pixelated}
+  #tech{font-size:11px; color:#a7adbb; margin-top:6px; white-space:pre-line}
+  details summary{cursor:pointer; color:var(--accent)}
+  details pre{background:#0e1420;border:1px solid #2a3550;border-radius:8px;padding:8px;max-height:200px;overflow:auto}
+  @media (max-width:980px){ body{grid-template-columns:1fr; grid-template-rows:auto auto} #ui{border-left:none; border-top:1px solid #232a3a} }
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="c"></canvas>
+    <div id="hudPanel">
+      <canvas id="hud" width="240" height="90"></canvas>
+      <div id="tech"></div>
+    </div>
+  </div>
+  <aside id="ui">
+    <div class="col">
+      <h1>Rubik's Cube — TV Snow</h1>
+      <div id="hint">Drag a <b>sticker</b> to twist. Drag empty space to orbit. Hold <b>M</b> or middle mouse for free-move translate.</div>
+    </div>
+
+    <div class="col">
+      <label>Scramble length (moves)</label>
+      <div class="row">
+        <input id="scrLen" type="number" min="1" max="100" step="1" value="25" />
+        <button id="btnScramble">Scramble</button>
+        <button id="btnSolve" title="Undo last scramble">Solve</button>
+      </div>
+    </div>
+
+    <div class="col">
+      <label>Manual moves</label>
+      <div class="grid">
+        <button data-move="U">U</button><button data-move="U'">U'</button><button data-move="U2">U2</button>
+        <button data-move="D">D</button><button data-move="D'">D'</button><button data-move="D2">D2</button>
+        <button data-move="L">L</button><button data-move="L'">L'</button><button data-move="L2">L2</button>
+        <button data-move="R">R</button><button data-move="R'">R'</button><button data-move="R2">R2</button>
+        <button data-move="F">F</button><button data-move="F'">F'</button><button data-move="F2">F2</button>
+        <button data-move="B">B</button><button data-move="B'">B'</button><button data-move="B2">B2</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btnReset" title="Return to solved state">Reset</button>
+      <button id="btnUndo" title="Undo last manual move">Undo</button>
+      <div class="tiny">Turn speed</div>
+      <input id="speed" type="range" min="120" max="800" value="280" />
+    </div>
+    <div class="row">
+      <button id="btnMove" class="tbtn" aria-pressed="false" title="Toggle free-move translate (also: M, middle mouse)">Move mode (M)</button>
+    </div>
+    <div class="row">
+      <div class="tiny">Snow strength</div>
+      <input id="snow" type="range" min="0" max="0.6" step="0.01" value="0.55" />
+      <label class="tiny"><input id="quant" type="checkbox" /> CRT quantize</label>
+    </div>
+    <div class="row">
+      <div class="tiny">Brightness lift</div>
+      <input id="lift" type="range" min="0" max="1" step="0.01" value="0.45" />
+    </div>
+    <div class="row">
+      <div class="tiny">Grain size</div>
+      <input id="grain" type="range" min="2" max="24" step="1" value="14" />
+    </div>
+    <div class="row">
+      <div class="tiny">Dither levels</div>
+      <input id="levels" type="range" min="2" max="8" step="1" value="7" />
+    </div>
+    <div class="row">
+      <div class="tiny">Dither contrast</div>
+      <input id="contrast" type="range" min="0" max="1" step="0.01" value="0.45" />
+    </div>
+
+    <div class="col">
+      <label>Move log</label>
+      <div id="moves"></div>
+    </div>
+
+    <details>
+      <summary>Diagnostics (self-tests)</summary>
+      <div class="row">
+        <button id="runTests">Run self-checks</button>
+      </div>
+      <pre id="testOut">(no tests run yet)</pre>
+    </details>
+  </aside>
+
+<!-- Import map so "three" bare specifier resolves -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ===== TempleOS palette and face mapping ===== */
+const TOS = {0:'#000000',1:'#0000AA',2:'#00AA00',3:'#00AAAA',4:'#AA0000',5:'#AA00AA',6:'#AA5500',7:'#AAAAAA',8:'#555555',9:'#5555FF',10:'#55FF55',11:'#55FFFF',12:'#FF5555',13:'#FF55FF',14:'#FFFF55',15:'#FFFFFF'};
+const FACE_TINTS = { U:TOS[15], D:TOS[14], F:TOS[10], B:TOS[9], R:TOS[12], L:'#FFAA00' };
+const FACE_SEED  = { U:1, D:2, F:3, B:4, R:5, L:6 };
+
+/* ===== Renderer / Scene / Camera ===== */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100); camera.position.set(6.8,5.6,7.6);
+const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping=true; controls.enablePan=false; controls.rotateSpeed=0.9; controls.dampingFactor=0.08;
+scene.add(new THREE.AmbientLight(0xffffff, 0.9)); const key=new THREE.DirectionalLight(0xffffff,0.55); key.position.set(5,8,7); scene.add(key);
+
+/* ===== TV Snow Shader — Bayer ordered dither, multi-level, contrast ===== */
+const tvSnowFragment = String.raw`
+uniform vec3 baseColor; uniform float time; uniform float seed; uniform float amp; uniform bool quant; uniform float gain;
+uniform sampler2D bayerTex; uniform vec2 bayerSize; uniform float grainSize; uniform float levels; uniform float contrast;
+float hash(vec2 p){ return fract( sin(dot(p, vec2(127.1,311.7))) * 43758.5453123 ); }
+void main(){
+  vec2 cell = floor(gl_FragCoord.xy / grainSize);
+  vec2 uv = (mod(cell, bayerSize) + 0.5) / bayerSize;
+  float t = texture2D(bayerTex, uv).r;
+  float L = max(1.0, levels);
+  float acc = 0.0;
+  for (int i=0; i<8; ++i){
+    float enable = step(float(i), L);
+    float n = hash(gl_FragCoord.xy + vec2(time*120.0, seed*71.0) + float(i)*13.37);
+    if (quant) n = floor(n*16.0)/15.0;
+    acc += step(t, n) * enable;
+  }
+  float bn = acc / L;
+  float g = (bn - 0.5) * 2.0;
+  g = mix(g, sign(g), contrast);
+  float sl = 1.0 + 0.012*sin(gl_FragCoord.y*0.06 + time*9.0);
+  vec3 col = baseColor * (1.0 + amp * g) * gain * sl;
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+const tvSnowVertex = String.raw`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `;
+
+// Build 6 shared materials (one per face). Include all uniforms we touch.
+const faceMaterials = {};
+for (const k of Object.keys(FACE_TINTS)){
+  faceMaterials[k] = new THREE.ShaderMaterial({
+    uniforms:{
+      baseColor:{value:new THREE.Color(FACE_TINTS[k])}, time:{value:0}, seed:{value:FACE_SEED[k]}, amp:{value:0.4}, quant:{value:false}, gain:{value:1.0},
+      blueTex:{value:null}, blueSize:{value:new THREE.Vector2(128,128)},
+      bayerTex:{value:null}, bayerSize:{value:new THREE.Vector2(8,8)}, grainSize:{value:14.0}, levels:{value:7.0}, contrast:{value:0.45}
+    },
+    vertexShader: tvSnowVertex, fragmentShader: tvSnowFragment
+  });
+}
+
+// Legacy: make a blue-noise tile (diagnostics only)
+function makeBlueNoiseTexture(size=128, iters=4){
+  const N=size; const src=new Float32Array(N*N); const tmp=new Float32Array(N*N);
+  for(let i=0;i<N*N;i++) src[i]=Math.random();
+  const idx=(x,y)=> ((y+N)%N)*N + ((x+N)%N);
+  for(let k=0;k<iters;k++){
+    for(let y=0;y<N;y++){
+      for(let x=0;x<N;x++){
+        const c=src[idx(x,y)], n=src[idx(x,y-1)], s=src[idx(x,y+1)], w=src[idx(x-1,y)], e=src[idx(x+1,y)];
+        const blur=(c*4.0 + n + s + w + e)/8.0; tmp[idx(x,y)] = c - blur;
+      }
+    }
+    src.set(tmp);
+  }
+  let mn=Infinity, mx=-Infinity; for(let i=0;i<N*N;i++){ const v=src[i]; if(v<mn) mn=v; if(v>mx) mx=v; }
+  const data=new Uint8Array(N*N); const denom=(mx-mn)||1.0; for(let i=0;i<N*N;i++){ data[i]=Math.max(0, Math.min(255, Math.round(((src[i]-mn)/denom)*255))); }
+  const tex=new THREE.DataTexture(data, N, N, THREE.RedFormat); tex.needsUpdate=true; tex.wrapS=THREE.RepeatWrapping; tex.wrapT=THREE.RepeatWrapping; tex.minFilter=THREE.NearestFilter; tex.magFilter=THREE.NearestFilter; return {tex, size:N};
+}
+const {tex:blueTex, size:blueSize} = makeBlueNoiseTexture(128, 4);
+for (const k of Object.keys(faceMaterials)){
+  faceMaterials[k].uniforms.blueTex.value = blueTex;
+  faceMaterials[k].uniforms.blueSize.value.set(blueSize, blueSize);
+}
+
+// Bayer 8x8 threshold texture
+const BAYER_SRC = new Uint8Array([
+  0,32, 8,40, 2,34,10,42,
+  48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38,
+  60,28,52,20,62,30,54,22,
+  3,35,11,43, 1,33, 9,41,
+  51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37,
+  63,31,55,23,61,29,53,21
+]);
+const BAYER_NORM = new Float32Array(64); for(let i=0;i<64;i++) BAYER_NORM[i] = BAYER_SRC[i]/63.0;
+function makeBayer8Texture(){
+  const N=8; const M = new Uint8Array(BAYER_SRC);
+  for(let i=0;i<N*N;i++){ M[i] = Math.round((M[i]/63)*255); }
+  const tex=new THREE.DataTexture(M, N, N, THREE.RedFormat);
+  tex.needsUpdate=true; tex.wrapS=THREE.RepeatWrapping; tex.wrapT=THREE.RepeatWrapping; tex.minFilter=THREE.NearestFilter; tex.magFilter=THREE.NearestFilter;
+  return tex;
+}
+const bayerTex = makeBayer8Texture();
+for (const k of Object.keys(faceMaterials)) faceMaterials[k].uniforms.bayerTex.value = bayerTex;
+
+/* ===== Cube construction ===== */
+const cubeGroup = new THREE.Group(); scene.add(cubeGroup);
+const CUBIE_SIZE=0.98, STICKER_SIZE=0.92, GAP=0.04, STEP=CUBIE_SIZE+GAP;
+let stickerMeshes=[]; let allCubies=[];
+function addSticker(parent, normal, faceKey){
+  const geom=new THREE.PlaneGeometry(STICKER_SIZE,STICKER_SIZE);
+  const mesh=new THREE.Mesh(geom, faceMaterials[faceKey]);
+  mesh.position.copy(normal.clone().multiplyScalar(CUBIE_SIZE/2 + 0.002));
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), normal);
+  mesh.userData.face=faceKey; parent.add(mesh); stickerMeshes.push(mesh);
+}
+function createCubie(ix,iy,iz){
+  const g=new THREE.Group(); g.position.set(ix*STEP,iy*STEP,iz*STEP); g.userData.idx={x:ix,y:iy,z:iz};
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(CUBIE_SIZE,CUBIE_SIZE,CUBIE_SIZE), new THREE.MeshStandardMaterial({color:0x0a0d16,roughness:0.6,metalness:0.15})));
+  if(iy=== 1) addSticker(g,new THREE.Vector3(0, 1,0),'U');
+  if(iy===-1) addSticker(g,new THREE.Vector3(0,-1,0),'D');
+  if(ix=== 1) addSticker(g,new THREE.Vector3(1,0,0),'R');
+  if(ix===-1) addSticker(g,new THREE.Vector3(-1,0,0),'L');
+  if(iz=== 1) addSticker(g,new THREE.Vector3(0,0, 1),'F');
+  if(iz===-1) addSticker(g,new THREE.Vector3(0,0,-1),'B');
+  cubeGroup.add(g); allCubies.push(g);
+}
+function buildCube(){ while(cubeGroup.children.length) cubeGroup.remove(cubeGroup.children[0]); stickerMeshes=[]; allCubies=[]; for(let x=-1;x<=1;x++) for(let y=-1;y<=1;y++) for(let z=-1;z<=1;z++) createCubie(x,y,z); }
+buildCube();
+
+/* ===== Resize ===== */
+function resize(){ const rect=document.getElementById('stage').getBoundingClientRect(); const w=Math.max(320,rect.width), h=Math.max(280,rect.height); renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+addEventListener('resize',resize); resize();
+
+/* ===== HUD (waveforms + tech info) ===== */
+const hudCanvas=document.getElementById('hud');
+const hudCtx = hudCanvas ? hudCanvas.getContext('2d') : null;
+const techEl = document.getElementById('tech');
+const fractJS = (x)=> x - Math.floor(x);
+function hash2(x,y){ return fractJS(Math.sin(x*127.1 + y*311.7) * 43758.5453123); }
+function bayerThresh(ix,iy){ const x=((ix%8)+8)%8, y=((iy%8)+8)%8; return (BAYER_NORM && BAYER_NORM[y*8+x]) || 0.5; }
+let fps=0, _fpsFrames=0, _fpsLast=performance.now();
+function drawHUD(t, state){ if(!hudCtx) return; const {levels, grain, contrast, snowAmp, lift, quantize} = state; const ctx=hudCtx; const w=ctx.canvas.width, h=ctx.canvas.height; ctx.clearRect(0,0,w,h);
+  // grid
+  ctx.fillStyle='rgba(16,20,30,0.85)'; ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle='rgba(120,140,170,0.35)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
+  const L=Math.max(1, Math.round(levels)); const gsize=Math.max(1, Math.round(grain)); const seed=3.0;
+  const gainVal=1.0 + (lift * Math.pow(Math.max(0,Math.min(1,snowAmp)), 0.85) * 1.4);
+  let sum=0, sumsq=0; ctx.beginPath();
+  for(let x=0;x<w;x++){
+    const cellX=Math.floor(x/gsize); const th=bayerThresh(cellX,0);
+    let acc=0; for(let i=0;i<Math.min(8,L);i++){ let n=hash2(x + t*120.0, seed*71.0 + i*13.37); if(quantize) n=Math.floor(n*16.0)/15.0; acc += (n>=th)?1:0; }
+    const bn=acc/Math.min(8,L); let g=(bn-0.5)*2; g = g*(1-contrast) + Math.sign(g)*contrast; const out=Math.max(0,Math.min(1,(1 + snowAmp*g) * gainVal));
+    const y=h - out*(h-10) - 5; if(x===0) ctx.moveTo(0,y); else ctx.lineTo(x,y); sum+=out; sumsq+=out*out; }
+  ctx.strokeStyle='rgba(230,235,255,0.9)'; ctx.lineWidth=1.2; ctx.stroke();
+  _fpsFrames++; const now=performance.now(); if(now-_fpsLast>500){ fps=Math.round(_fpsFrames*1000/(now-_fpsLast)); _fpsFrames=0; _fpsLast=now; }
+  const n=w, mean=sum/n, rms=Math.sqrt(Math.max(0,sumsq/n - mean*mean));
+  if(techEl){
+    const c = (contrast||0).toFixed(2);
+    const s = (snowAmp||0).toFixed(2);
+    const l = (lift||0).toFixed(2);
+    const lines = [
+      'Noise: Bayer8 ordered (multi-level)',
+      'levels:'+L+'  grain:'+gsize+'px  contrast:'+c,
+      'snow:'+s+'  lift:'+l+'  quant:'+(quantize?'on':'off')+'  fps:'+fps,
+      'mean:'+mean.toFixed(3)+'  rms:'+rms.toFixed(3)
+    ];
+    techEl.textContent = lines.join('\n');
+  }
+}
+
+/* ===== Animation & UI ===== */
+const snowEl=document.getElementById('snow'); const quantEl=document.getElementById('quant');
+const liftEl=document.getElementById('lift'); const grainEl=document.getElementById('grain'); const levelsEl=document.getElementById('levels'); const contrastEl=document.getElementById('contrast');
+let snowAmp=parseFloat((snowEl && snowEl.value)||'0.55'); let quantize=false;
+let lift=parseFloat((liftEl && liftEl.value)||'0.45'); let grain=parseFloat((grainEl && grainEl.value)||'14'); let levels=parseFloat((levelsEl && levelsEl.value)||'7'); let contrast=parseFloat((contrastEl && contrastEl.value)||'0.45');
+if(snowEl)  snowEl.addEventListener('input', e=>{ const v=parseFloat(e.target.value); if(Number.isFinite(v)) snowAmp=v; });
+if(liftEl)  liftEl.addEventListener('input', e=>{ const v=parseFloat(e.target.value); if(Number.isFinite(v)) lift=v; });
+if(grainEl) grainEl.addEventListener('input', e=>{ const v=parseFloat(e.target.value); if(Number.isFinite(v)) grain=v; });
+if(levelsEl) levelsEl.addEventListener('input', e=>{ const v=parseFloat(e.target.value); if(Number.isFinite(v)) levels=v; });
+if(contrastEl) contrastEl.addEventListener('input', e=>{ const v=parseFloat(e.target.value); if(Number.isFinite(v)) contrast=v; });
+if(quantEl) quantEl.addEventListener('change', e=>{ quantize=!!e.target.checked; });
+
+let tStart=performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const t=(performance.now()-tStart)/1000;
+  for (const k of Object.keys(faceMaterials)){
+    const m = faceMaterials[k];
+    m.uniforms.time.value = t;
+    m.uniforms.amp.value = snowAmp;
+    m.uniforms.quant.value = quantize;
+    m.uniforms.gain.value = 1.0 + (lift * Math.pow(Math.max(0,Math.min(1,snowAmp)), 0.85) * 1.4);
+    m.uniforms.grainSize.value = grain;
+    m.uniforms.levels.value = levels;
+    m.uniforms.contrast.value = contrast;
+  }
+  drawHUD(t, {levels, grain, contrast, snowAmp, lift, quantize});
+  controls.update(); renderer.render(scene,camera);
+}
+animate();
+
+/* ===== Move engine ===== */
+const moveLogEl=document.getElementById('moves'); const speedEl=document.getElementById('speed');
+let animating=false; let queue=[]; let lastScramble=[]; let manualHistory=[]; let moveLogArr=[];
+function logMoves(arr){ moveLogArr=arr.slice(); moveLogEl.textContent=moveLogArr.join(' '); moveLogEl.scrollTop=moveLogEl.scrollHeight; }
+function layerFor(face){ if(face==='U') return allCubies.filter(c=>c.userData.idx.y=== 1); if(face==='D') return allCubies.filter(c=>c.userData.idx.y===-1); if(face==='R') return allCubies.filter(c=>c.userData.idx.x=== 1); if(face==='L') return allCubies.filter(c=>c.userData.idx.x===-1); if(face==='F') return allCubies.filter(c=>c.userData.idx.z=== 1); return allCubies.filter(c=>c.userData.idx.z===-1); }
+function axisFor(face){ if(face==='U'||face==='D') return new THREE.Vector3(0,1,0).multiplyScalar(face==='U'?1:-1); if(face==='R'||face==='L') return new THREE.Vector3(1,0,0).multiplyScalar(face==='R'?1:-1); return new THREE.Vector3(0,0,1).multiplyScalar(face==='F'?1:-1); }
+function updateIdxFromWorld(obj){ const p=cubeGroup.worldToLocal(obj.getWorldPosition(new THREE.Vector3())); obj.userData.idx={ x:Math.max(-1,Math.min(1,Math.round(p.x/STEP))), y:Math.max(-1,Math.min(1,Math.round(p.y/STEP))), z:Math.max(-1,Math.min(1,Math.round(p.z/STEP))) }; }
+function rotateLayer(face, prime=false, twice=false){ return new Promise(res=>{ if(animating){ res(); return; } animating=true; const layer=layerFor(face); const pivot=new THREE.Group(); cubeGroup.add(pivot); for(const c of layer) pivot.attach(c); const axis=axisFor(face).normalize(); const base=prime? +Math.PI/2 : -Math.PI/2; const total=base*(twice?2:1); let raw=parseInt(speedEl && speedEl.value,10); let dur=Number.isFinite(raw)? raw : 280; dur=Math.max(120,dur); const start=performance.now(); function step(){ const k=Math.min(1,(performance.now()-start)/dur); const ang=total*((k-(pivot.userData.k||0))); pivot.rotateOnAxis(axis,ang); pivot.userData.k=k; if(k<1){ requestAnimationFrame(step); return; } for(const o of [...pivot.children]){ scene.attach(o); cubeGroup.attach(o); updateIdxFromWorld(o);} cubeGroup.remove(pivot); animating=false; res(); } step(); }); }
+function applyMoveString(m, record=true){ const face=m[0]; const prime=m.endsWith("'"); const twice=m.endsWith('2'); return rotateLayer(face,prime,twice).then(()=>{ if(record) manualHistory.push(m); }); }
+function enqueue(moves, record=true){ queue.push(...moves.map(m=>({m,record}))); if(!animating) runQueue(); }
+function runQueue(){ if(queue.length===0) return; const job=queue.shift(); applyMoveString(job.m,job.record).then(runQueue); }
+
+/* ===== Scramble / Solve ===== */
+const MOVES=["U","U'","U2","D","D'","D2","L","L'","L2","R","R'","R2","F","F'","F2","B","B'","B2"]; const inv=m=> m.endsWith('2')?m : m.endsWith("'")? m[0] : (m[0]+"'");
+function randomScramble(n){ const seq=[]; let last=''; for(let i=0;i<n;i++){ let pick; do{ pick=MOVES[Math.floor(Math.random()*MOVES.length)]; } while(pick[0]===last); seq.push(pick); last=pick[0]; } return seq; }
+function doScramble(n){ const seq=randomScramble(n); lastScramble=seq.slice(); logMoves(seq); enqueue(seq,false); }
+function undoScramble(){ const base=lastScramble.length? lastScramble : manualHistory; const invSeq=base.slice().reverse().map(inv); lastScramble=[]; manualHistory=[]; logMoves(invSeq); enqueue(invSeq,false); }
+
+/* ===== Picking + Drag-to-turn + Free-move translate ===== */
+const raycaster = new THREE.Raycaster();
+let downHit=null; let downPos=new THREE.Vector2(); let dragging=false;
+let dragState = { translating:false, plane:new THREE.Plane(), startPoint:new THREE.Vector3(), cubeStart:new THREE.Vector3() };
+function hits(cx,cy){ const r=renderer.domElement.getBoundingClientRect(); const x=((cx-r.left)/r.width)*2-1; const y=-((cy-r.top)/r.height)*2+1; raycaster.setFromCamera({x,y},camera); return raycaster.intersectObjects(stickerMeshes,false); }
+function faceFromNormal(n){ const ax=['x','y','z']; const arr=[Math.abs(n.x),Math.abs(n.y),Math.abs(n.z)]; const i=arr.indexOf(Math.max(...arr)); if(ax[i]==='z') return n.z>0?'F':'B'; if(ax[i]==='y') return n.y>0?'U':'D'; return n.x>0?'R':'L'; }
+function worldToScreen(v){ const p=v.clone().project(camera); const r=renderer.domElement.getBoundingClientRect(); return new THREE.Vector2((p.x*0.5+0.5)*r.width,(-p.y*0.5+0.5)*r.height); }
+function screenAxis(sticker,dir){ const o=sticker.getWorldPosition(new THREE.Vector3()); const p1=worldToScreen(o); const p2=worldToScreen(o.clone().add(dir)); return p2.sub(p1); }
+function planeHitAt(cx,cy,plane){ const r=renderer.domElement.getBoundingClientRect(); const x=((cx-r.left)/r.width)*2-1; const y=-((cy-r.top)/r.height)*2+1; raycaster.setFromCamera({x,y},camera); const out=new THREE.Vector3(); return raycaster.ray.intersectPlane(plane,out)? out : null; }
+
+// Move mode toggle + capture handler (translate wins when active or middle mouse)
+const btnMove = document.getElementById('btnMove');
+let translateMode = false;
+function setMoveMode(on){ translateMode=!!on; if(btnMove) btnMove.setAttribute('aria-pressed', translateMode?'true':'false'); }
+if(btnMove) btnMove.addEventListener('click', ()=> setMoveMode(!translateMode));
+window.addEventListener('keydown', e=>{ if(e.key==='m'||e.key==='M'){ setMoveMode(!translateMode); }});
+renderer.domElement.addEventListener('contextmenu', e=> e.preventDefault());
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (!animating && (translateMode || e.button===1)) {
+    controls.enabled=false;
+    dragState.translating=true;
+    const normal=camera.getWorldDirection(new THREE.Vector3());
+    dragState.plane.setFromNormalAndCoplanarPoint(normal, cubeGroup.getWorldPosition(new THREE.Vector3()));
+    const p=planeHitAt(e.clientX,e.clientY,dragState.plane);
+    if(p){ dragState.startPoint.copy(p); dragState.cubeStart.copy(cubeGroup.position); }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+}, true);
+
+// Regular pointer handlers (sticker drag and translate updates)
+renderer.domElement.addEventListener('pointerdown',(e)=>{
+  if(animating) return;
+  if(dragState.translating) return; // already in translate mode
+  const h=hits(e.clientX,e.clientY);
+  if(h.length){ downHit=h[0].object; downPos.set(e.clientX,e.clientY); dragging=true; controls.enabled=false; }
+  else { controls.enabled=true; }
+});
+renderer.domElement.addEventListener('pointermove',(e)=>{
+  if(dragState.translating){ const p=planeHitAt(e.clientX,e.clientY,dragState.plane); if(p){ const delta=new THREE.Vector3().subVectors(p,dragState.startPoint); cubeGroup.position.copy(dragState.cubeStart).add(delta); } return; }
+  if(!dragging||!downHit||animating) return;
+  const d=new THREE.Vector2(e.clientX-downPos.x,e.clientY-downPos.y); if(d.length()<6) return;
+  const s=downHit; const q=s.getWorldQuaternion(new THREE.Quaternion());
+  const wx=new THREE.Vector3(1,0,0).applyQuaternion(q); const wy=new THREE.Vector3(0,1,0).applyQuaternion(q);
+  const sx=screenAxis(s,wx.clone().multiplyScalar(0.2)); const sy=screenAxis(s,wy.clone().multiplyScalar(0.2));
+  if(sx.length()<1e-6||sy.length()<1e-6) return;
+  const hx=d.clone().normalize().dot(sx.clone().normalize()); const hy=d.clone().normalize().dot(sy.clone().normalize());
+  let cw = Math.abs(hx)>Math.abs(hy) ? (hx>0) : (hy>0);
+  const nWorld=s.getWorldDirection(new THREE.Vector3()); const face=faceFromNormal(nWorld);
+  const camDir=new THREE.Vector3().subVectors(new THREE.Vector3(), camera.getWorldDirection(new THREE.Vector3())); const facing=nWorld.dot(camDir)>0; if(!facing) cw=!cw;
+  const move=face + (cw? '' : "'"); enqueue([move],true);
+  dragging=false; downHit=null; controls.enabled=true;
+});
+addEventListener('pointerup',()=>{ dragging=false; downHit=null; controls.enabled=true; dragState.translating=false; });
+
+/* ===== Buttons ===== */
+const scrLenEl=document.getElementById('scrLen'); const btnScr=document.getElementById('btnScramble'); const btnSolve=document.getElementById('btnSolve'); const btnReset=document.getElementById('btnReset'); const btnUndo=document.getElementById('btnUndo');
+if(btnScr) btnScr.addEventListener('click',()=>{ const n=Math.max(1,Math.min(100,parseInt((scrLenEl&&scrLenEl.value)||'25',10)||25)); doScramble(n); });
+if(btnSolve) btnSolve.addEventListener('click',undoScramble);
+if(btnReset) btnReset.addEventListener('click',()=>{ if(animating) return; queue.length=0; lastScramble=[]; manualHistory=[]; buildCube(); cubeGroup.rotation.set(Math.PI*0.08,Math.PI*0.11,0); logMoves([]); });
+if(btnUndo) btnUndo.addEventListener('click',()=>{ if(!manualHistory.length) return; const m=manualHistory.pop(); enqueue([inv(m)],false); });
+const uiRoot=document.getElementById('ui'); if(uiRoot){ uiRoot.addEventListener('click',(e)=>{ const t=e.target.closest('button'); if(!t||!uiRoot.contains(t)) return; const move=t.getAttribute('data-move'); if(move){ logMoves([...(moveLogArr||[]), move]); enqueue([move], true); } }); }
+
+/* ===== Diagnostics (self-tests) ===== */
+function runSelfTests(){
+  const out=[]; const ok=(name,cond)=> out.push((cond?'OK':'FAIL')+' '+name);
+  ok('has #scrLen', !!document.getElementById('scrLen'));
+  ok('has #btnScramble', !!document.getElementById('btnScramble'));
+  ok('has #snow slider', !!document.getElementById('snow'));
+  ok('has #quant checkbox', !!document.getElementById('quant'));
+  ok('has #lift slider', !!document.getElementById('lift'));
+  ok('has #grain slider', !!document.getElementById('grain'));
+  ok('has #levels slider', !!document.getElementById('levels'));
+  ok('has #contrast slider', !!document.getElementById('contrast'));
+  ok('has #moves log', !!document.getElementById('moves'));
+  ok('has #hud canvas', !!document.getElementById('hud'));
+  ok('has #tech block', !!document.getElementById('tech'));
+  ok('has move toggle', !!document.getElementById('btnMove'));
+  (function(){ const hp=document.getElementById('hudPanel'); ok('hud non-interactive', hp && getComputedStyle(hp).pointerEvents === 'none'); })();
+  // New checks for drag infrastructure
+  ok('dragState object present', typeof dragState==='object');
+  ok('planeHitAt() defined', typeof planeHitAt==='function');
+  const matsOk = Object.keys(faceMaterials).every(k=>{ const u=faceMaterials[k].uniforms; return u && u.baseColor && u.time && u.seed && u.amp && u.quant && u.gain && u.blueTex && u.blueSize && u.bayerTex && u.bayerSize && u.grainSize && u.levels && u.contrast; });
+  ok('faceMaterials have all uniforms', matsOk);
+  (function(){ const keys=Object.keys(faceMaterials); if(keys.length){ const bs=faceMaterials[keys[0]].uniforms.blueSize.value; ok('blue noise 128x128', Math.round(bs.x)===128 && Math.round(bs.y)===128); }})();
+  (function(){ const keys=Object.keys(faceMaterials); if(keys.length){ const bs=faceMaterials[keys[0]].uniforms.bayerSize.value; ok('bayer 8x8', Math.round(bs.x)===8 && Math.round(bs.y)===8); }})();
+  try{ for (const k of Object.keys(faceMaterials)) { const u=faceMaterials[k].uniforms; u.gain.value=1.1; u.grainSize.value=16; u.levels.value=6; u.contrast.value=0.5; } ok('uniforms settable', true);}catch(e){ ok('uniforms settable', false); }
+  ok('move queue usable', Array.isArray(queue));
+  const pre=document.getElementById('testOut'); if(pre) pre.textContent = out.join('\n');
+}
+const runBtn=document.getElementById('runTests'); if(runBtn) runBtn.addEventListener('click', runSelfTests);
+
+/* ===== Start pose ===== */
+cubeGroup.rotation.y=Math.PI*0.11; cubeGroup.rotation.x=Math.PI*0.08;
+</script>
+</body>
+</html>
